@@ -13,16 +13,8 @@ st.set_page_config(page_title="Pesquisa de Satisfação", layout="centered")
 DATA_DIR = "data"
 FILE_PATH = os.path.join(DATA_DIR, "respostas.jsonl")
 
-# Admin password via secrets (preferido) ou variável de ambiente (fallback)
-ADMIN_PASSWORD = None
-if "ADMIN_PASSWORD" in st.secrets:
-    ADMIN_PASSWORD = st.secrets["ADMIN_PASSWORD"]
-else:
-    ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")  # opcional
-
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
-
 
 # ==========================
 # Persistência
@@ -37,12 +29,12 @@ def carregar_respostas() -> list[dict]:
         return []
     with open(FILE_PATH, "r", encoding="utf-8") as f:
         linhas = [ln.strip() for ln in f.readlines() if ln.strip()]
-    out = []
+    out: list[dict] = []
     for ln in linhas:
         try:
             out.append(json.loads(ln))
         except json.JSONDecodeError:
-            # Se alguma linha estiver corrompida, ignora
+            # Ignora linhas corrompidas
             pass
     return out
 
@@ -71,7 +63,7 @@ if modo == "Aluno":
         nivel_dificuldade = st.selectbox(
             "4️⃣ O nível da aula foi:",
             ["Muito fácil", "Adequado", "Difícil"],
-            index=1
+            index=1,
         )
 
         sugestao = st.text_area("5️⃣ O que pode melhorar? (opcional)")
@@ -86,73 +78,117 @@ if modo == "Aluno":
             "dinamica": int(nota_dinamica),
             "material": int(nota_material),
             "nivel": nivel_dificuldade,
-            "sugestao": sugestao.strip()
+            "sugestao": sugestao.strip(),
         }
         salvar_resposta(resposta)
         st.success("✅ Obrigado! Sua resposta foi registrada.")
 
-
 # --------------------------
-# MODO ADMIN
+# MODO ADMIN (usuário + senha + limpar)
 # --------------------------
 else:
     st.title("🔐 Área Administrativa")
 
-    if not ADMIN_PASSWORD:
+    # Carrega credenciais de forma segura
+    admin_user = None
+    admin_password = None
+
+    if "ADMIN_USER" in st.secrets and "ADMIN_PASSWORD" in st.secrets:
+        admin_user = st.secrets["ADMIN_USER"]
+        admin_password = st.secrets["ADMIN_PASSWORD"]
+    else:
+        # Fallback opcional via variáveis de ambiente (útil local)
+        admin_user = os.getenv("ADMIN_USER")
+        admin_password = os.getenv("ADMIN_PASSWORD")
+
+    if not admin_user or not admin_password:
         st.error(
-            "Senha do admin não configurada.\n\n"
+            "Credenciais do admin não configuradas.\n\n"
             "✅ Configure em `.streamlit/secrets.toml`:\n"
-            '`ADMIN_PASSWORD = "sua_senha"`\n\n'
-            "ou defina a variável de ambiente `ADMIN_PASSWORD`."
+            'ADMIN_USER = "seu_usuario"\n'
+            'ADMIN_PASSWORD = "sua_senha"\n\n'
+            "ou defina as variáveis de ambiente `ADMIN_USER` e `ADMIN_PASSWORD`."
         )
         st.stop()
 
-    # Pequeno login em sessão
-    if "admin_ok" not in st.session_state:
-        st.session_state.admin_ok = False
+    # Controle de sessão
+    if "admin_logado" not in st.session_state:
+        st.session_state.admin_logado = False
+    if "confirmar_limpeza" not in st.session_state:
+        st.session_state.confirmar_limpeza = False
 
-    if not st.session_state.admin_ok:
-        senha = st.text_input("Digite a senha:", type="password")
-        col_a, col_b = st.columns([1, 2])
-        with col_a:
-            entrar = st.button("Entrar", use_container_width=True)
-        with col_b:
-            st.caption("Dica: use `.streamlit/secrets.toml` para não expor senha.")
+    # Login
+    if not st.session_state.admin_logado:
+        st.subheader("Login Admin")
+        usuario = st.text_input("Usuário")
+        senha = st.text_input("Senha", type="password")
 
-        if entrar:
-            if senha == ADMIN_PASSWORD:
-                st.session_state.admin_ok = True
-                st.success("✅ Acesso liberado.")
+        if st.button("Entrar"):
+            if usuario == admin_user and senha == admin_password:
+                st.session_state.admin_logado = True
+                st.success("Login realizado com sucesso!")
                 st.rerun()
             else:
-                st.error("Senha incorreta.")
+                st.error("Usuário ou senha incorretos.")
         st.stop()
 
-    # Botão de sair
+    # Sidebar: logout
     if st.sidebar.button("Sair do Admin"):
-        st.session_state.admin_ok = False
+        st.session_state.admin_logado = False
+        st.session_state.confirmar_limpeza = False
         st.rerun()
 
-    respostas = carregar_respostas()
+    st.success("✅ Admin logado")
 
+    # Ações rápidas
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🔄 Atualizar dados", use_container_width=True):
+            st.rerun()
+
+    with c2:
+        if st.button("🗑️ Limpar todas as respostas", use_container_width=True):
+            st.session_state.confirmar_limpeza = True
+
+    # Confirmação de limpeza
+    if st.session_state.confirmar_limpeza:
+        st.warning("⚠️ Tem certeza que deseja apagar TODAS as respostas?")
+
+        a, b = st.columns(2)
+        with a:
+            if st.button("✅ Sim, apagar tudo", use_container_width=True):
+                if os.path.exists(FILE_PATH):
+                    os.remove(FILE_PATH)
+                st.session_state.confirmar_limpeza = False
+                st.success("Todas as respostas foram apagadas.")
+                st.rerun()
+
+        with b:
+            if st.button("❌ Cancelar", use_container_width=True):
+                st.session_state.confirmar_limpeza = False
+                st.rerun()
+
+        st.stop()
+
+    # Dashboard
+    respostas = carregar_respostas()
     if len(respostas) == 0:
-        st.warning("Nenhuma resposta registrada ainda.")
+        st.info("Nenhuma resposta registrada ainda.")
         st.stop()
 
     df = pd.DataFrame(respostas)
 
-    # Normaliza colunas esperadas
+    # Converte notas para número
     for c in ["clareza", "dinamica", "material"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
     st.subheader("📊 Métricas Gerais")
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric("Respostas", int(len(df)))
-    col2.metric("Clareza (média)", round(df["clareza"].mean(), 2))
-    col3.metric("Dinâmica (média)", round(df["dinamica"].mean(), 2))
-    col4.metric("Material (média)", round(df["material"].mean(), 2))
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Respostas", int(len(df)))
+    m2.metric("Clareza (média)", round(df["clareza"].mean(), 2))
+    m3.metric("Dinâmica (média)", round(df["dinamica"].mean(), 2))
+    m4.metric("Material (média)", round(df["material"].mean(), 2))
 
     st.subheader("📈 Distribuição do nível da aula")
     if "nivel" in df.columns:
@@ -163,12 +199,13 @@ else:
     if len(sug_df) == 0:
         st.info("Nenhuma sugestão escrita ainda.")
     else:
-        # Mostra as últimas sugestões primeiro (se houver timestamp)
+        # últimas sugestões primeiro
         if "timestamp" in sug_df.columns:
             try:
                 sug_df = sug_df.sort_values("timestamp", ascending=False)
             except Exception:
                 pass
+
         for _, row in sug_df.iterrows():
             when = row.get("data", "")
             texto = row.get("sugestao", "")
@@ -177,7 +214,6 @@ else:
     st.subheader("📥 Dados completos")
     st.dataframe(df, use_container_width=True)
 
-    # Exportação (download)
     st.subheader("⬇️ Exportar")
     csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
@@ -185,5 +221,5 @@ else:
         data=csv_bytes,
         file_name="respostas_pesquisa.csv",
         mime="text/csv",
-        use_container_width=True
+        use_container_width=True,
     )
